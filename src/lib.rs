@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
 
 // Decision Decisions (as per this commit):
-// - Every operation takes the lock, and thats fine if you need a non-performant channel.
 // - Sends contented with one another i.e senders are also synced btw themselves.
 // - We don't have a bounded variant of sender, which can allow some sort of sync
 //   by using a fixed size buffer. There is no back-pressure in our implementation.
@@ -62,12 +61,22 @@ impl<T> Sender<T> {
 }
 pub struct Receiver<T> {
     shared: Arc<Shared<T>>,
+
+    // As we know there is only one reciever, so why take a lock everytime?
+    // why not just pop all the elements into this buffer when you acquire a lock
+    // so that we can directly reply from this bufffer until its empty. Cool Right?
+    buffer: VecDeque<T>,
 }
 
 impl<T> Receiver<T> {
     // receive should be blocking, as when there is no element
     // the receive function should make the thread wait
     pub fn receive(&mut self) -> Option<T> {
+        // When there are elements in the buffer directly reply
+        if let Some(t) = self.buffer.pop_front() {
+            return Some(t);
+        }
+
         // loop because when ever we are woken up by wait i.e when a new element is added
         // we want to pop the value.
         // loop also helps because there are no guarantees from OS that this will be woken
@@ -76,7 +85,17 @@ impl<T> Receiver<T> {
         let mut inner = self.shared.inner.lock().unwrap();
         loop {
             match inner.queue.pop_front() {
-                Some(t) => return Some(t),
+                Some(t) => {
+                    // Just take all the elements into the buffer
+                    // so that we don't block for the next n recieve requests.
+                    if !inner.queue.is_empty() {
+                        // swap the empty self.buffer with the inner queue
+                        // self.buffer is emtpy as it this code-path is reached
+                        std::mem::swap(&mut self.buffer, &mut inner.queue);
+                    }
+
+                    return Some(t);
+                }
                 None if inner.senders == 0 => return None,
                 None => {
                     // wait takes a mutex, because the assumption is
@@ -123,6 +142,7 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
         },
         Receiver {
             shared: shared.clone(),
+            buffer: VecDeque::new(),
         },
     )
 }
