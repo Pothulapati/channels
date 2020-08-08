@@ -6,6 +6,25 @@ use std::sync::{Arc, Condvar, Mutex};
 // - We don't have a bounded variant of sender, which can allow some sort of sync
 //   by using a fixed size buffer. There is no back-pressure in our implementation.
 
+// Flavours:
+// - Syncrhonous channels: Channel where send() can bloc, and has limited capacity.
+// : Mutex + CondVar: VecDeque with Bounded
+// : (Cross beam) Atomic VecDeque + thread::park + thread::Thread::notify (for the notification system btw senders and recievers)
+// - Asynchronous channels: Channel where send() cannot bloc, unbounded.
+// : Mutex + Condvar + VecDeque (Our approach)
+// : Atomic Linked List or Atomic Queue
+// : Atomic block Linkerd List, linked list of atomic VecDequeue<T> used in cross beam
+// : Mutex + Condvar + LinkedList (so that we can mitigate the resizing problem)
+// - Rendezvous channels: Synchronous Channel with capacity = 0, Used for thread synchronization
+// : Condvar + Mutex
+// - Oneshot channels: Any capacity, In practice, only one call to send()
+
+// async/await
+// Hard to write a channel implemention to write a channel that works for both
+// If you do a send and the channel is full, in async world you want to yield to the executor,
+// and at some point you will be woken up to send.
+// Similar with Condvar but not the same as async functions have to return.
+
 // Inner is Arc, because sneder and receiver need to share the same instance of Inner
 // Sender should be clonable as its mspc, but if it is done using derive proc macro
 // then it expects T to be also clonable, thus restricting our channel to only clonable
